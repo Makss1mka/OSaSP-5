@@ -3,7 +3,6 @@
 #include <unistd.h>
 #include <string.h>
 #include <pthread.h>
-#include <semaphore.h>
 #include "./headers/queue.h"
 
 #define MAX_CONSUMER_THREADS 10
@@ -18,8 +17,8 @@ pthread_t producers[MAX_PRODUCER_THREADS];
 int consumers_working[MAX_CONSUMER_THREADS];
 int producers_working[MAX_PRODUCER_THREADS];
 
-sem_t free_space_sem;
-sem_t items_sem;
+pthread_cond_t free_space_cond;
+pthread_cond_t items_cond;
 
 pthread_mutex_t queue_mutex;
 pthread_mutex_t consumers_working_mutex;
@@ -30,22 +29,22 @@ message_queue_t* message_queue;
 
 // SEMS\MUTEX INIT AND END
 
-void semaphores_init() {
+void sync_init() {
     if (
-        sem_init(&free_space_sem, 0, QUEUE_BASE_SIZE) != 0 
-        || sem_init(&items_sem, 0, 0) != 0
+        pthread_cond_init(&free_space_cond, NULL) != 0 
+        || pthread_cond_init(&items_cond, NULL) != 0
         || pthread_mutex_init(&queue_mutex, NULL) != 0
         || pthread_mutex_init(&consumers_working_mutex, NULL) != 0
         || pthread_mutex_init(&producers_working_mutex, NULL) != 0
     ) {
-        perror("Semaphores/mutexes creation failed");
+        perror("Conds/mutexes creation failed");
         exit(1);
     }
 }
 
-void sems_destroy() {
-    sem_destroy(&free_space_sem);
-    sem_destroy(&items_sem);
+void sync_destroy() {
+    pthread_cond_destroy(&free_space_cond);
+    pthread_cond_destroy(&items_cond);
     pthread_mutex_destroy(&queue_mutex);
     pthread_mutex_destroy(&consumers_working_mutex);
     pthread_mutex_destroy(&producers_working_mutex);
@@ -69,14 +68,16 @@ void* producer_thread_processing(void* arg) {
 
         sleep(3);
 
-        sem_wait(&free_space_sem);
         pthread_mutex_lock(&queue_mutex);
+        while (queue_is_full(message_queue)) {
+            pthread_cond_wait(&free_space_cond, &queue_mutex);
+        }
 
         queue_push(queue_generate_message(), message_queue);
         printf("\nProducer (ind %d): pushed item\n", ind);
 
+        pthread_cond_signal(&items_cond);
         pthread_mutex_unlock(&queue_mutex);
-        sem_post(&items_sem);
     }
 
     printf("\nProducer (ind %d): Closing\n", ind);
@@ -97,8 +98,10 @@ void* consumer_thread_processing(void* arg) {
 
         sleep(4);
 
-        sem_wait(&items_sem);
         pthread_mutex_lock(&queue_mutex);
+        while (queue_is_empty(message_queue)) {
+            pthread_cond_wait(&items_cond, &queue_mutex);
+        }
 
         message_queue_element_t* data = queue_pop(message_queue);
 
@@ -113,8 +116,8 @@ void* consumer_thread_processing(void* arg) {
             data = NULL;
         }
 
+        pthread_cond_signal(&free_space_cond);
         pthread_mutex_unlock(&queue_mutex);
-        sem_post(&free_space_sem);
     }
 
     printf("\nConsumer (ind %d): Closing\n", ind);
@@ -243,7 +246,7 @@ void cleanup_and_exit() {
     close_all_threads(1);
     close_all_threads(-1);
 
-    sems_destroy();
+    sync_destroy();
 
     if (message_queue) {
         queue_free(message_queue);
@@ -269,7 +272,7 @@ void message_queue_init() {
 
 int main() {
     message_queue_init();
-    semaphores_init();
+    sync_init();
 
     printf("\nEnter option:");
     printf("\n+ add producer");
@@ -305,21 +308,15 @@ int main() {
         } else if (strcmp(option, "s") == 0) {
             printf("\nParent: Now %d producer threads, %d consumer threads", producers_count, consumers_count);
         } else if (strcmp(option, "r") == 0) {
-            if (message_queue->messages[message_queue->max_len - 1] != NULL) {
-                sem_wait(&items_sem);
-            } else {
-                sem_wait(&free_space_sem);
-            }
-
             pthread_mutex_lock(&queue_mutex);
             queue_reduce(message_queue);
             pthread_mutex_unlock(&queue_mutex);
         } else if (strcmp(option, "e") == 0) {
-            sem_post(&free_space_sem);
-
             pthread_mutex_lock(&queue_mutex);
             queue_expand(message_queue);
             pthread_mutex_unlock(&queue_mutex);   
+
+            pthread_cond_signal(&free_space_cond);
         } else if (strcmp(option, "q") == 0) {
             cleanup_and_exit();
             break;
