@@ -44,25 +44,26 @@ void queue_reduce(message_queue_t* queue) {
         return;
     }
 
+    if (queue->len == queue->max_len) {
+        return;
+    }
+
     if (queue->max_len == 0) {
         printf("Queue: cannot reduce queue, max len is actualy 0");
         return;
     }
 
-    if (queue->messages[queue->max_len - 1] != NULL) {
-        queue->len--;
-
-        free(queue->messages[queue->max_len - 1]);
+    if (queue->head > queue->tail) {
+        for (int i = queue->head; i < queue->max_len; i++) {
+            queue->messages[i - 1] = queue->messages[i];
+        }
         queue->messages[queue->max_len - 1] = NULL;
+        queue->head--;
     }
 
     queue->messages = realloc(queue->messages, sizeof(message_queue_element_t*) * --(queue->max_len));
 
-    if (queue->head == queue->max_len) {
-        queue->head--;
-        if (queue->messages[queue->head] == NULL) queue->head = 0;
-    }
-    if (queue->tail == queue->max_len) queue->tail--;
+    return;
 }
 
 void queue_free(message_queue_t* queue) {

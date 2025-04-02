@@ -302,13 +302,17 @@ int main() {
         } else if (strcmp(option, "_") == 0) {
             close_thread_by_ind(consumers_count - 1, -1);
         } else if (strcmp(option, "l") == 0) {
-            pthread_mutex_lock(&queue_mutex);
             queue_print(message_queue);
-            pthread_mutex_unlock(&queue_mutex);
         } else if (strcmp(option, "s") == 0) {
             printf("\nParent: Now %d producer threads, %d consumer threads", producers_count, consumers_count);
         } else if (strcmp(option, "r") == 0) {
+            if (consumers_count == 0) continue;
+
             pthread_mutex_lock(&queue_mutex);
+            while (queue_is_full(message_queue)) {
+                pthread_cond_wait(&free_space_cond, &queue_mutex);
+            }
+            
             queue_reduce(message_queue);
             pthread_mutex_unlock(&queue_mutex);
         } else if (strcmp(option, "e") == 0) {
