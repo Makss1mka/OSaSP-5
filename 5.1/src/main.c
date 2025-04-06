@@ -183,31 +183,47 @@ void create_thread(int opt) {
 
 void close_thread_by_ind(int ind, int type) {
     if (type == 1) {
-        if (producers_count > 0 && ind < producers_count) {
-            pthread_mutex_lock(&producers_working_mutex);
+        pthread_mutex_lock(&producers_working_mutex);
+        if (producers_count > 0 && ind >= 0 && ind < MAX_PRODUCER_THREADS && producers_working[ind] == 1) {
+            if (consumers_count == 0 && message_queue->len == message_queue->max_len) {
+                pthread_cancel(producers[ind]);
+                pthread_mutex_unlock(&queue_mutex);
+            }
+
             producers_working[ind] = 0;
             pthread_mutex_unlock(&producers_working_mutex);
 
             pthread_join(producers[ind], NULL);
 
+            pthread_mutex_lock(&producers_working_mutex);
             producers_count--;
+            pthread_mutex_unlock(&producers_working_mutex);
     
             printf("Parent: closed %dth producer thread. Remaining: %d\n", ind, producers_count);
         } else {
+            pthread_mutex_unlock(&producers_working_mutex);
             printf("Parent: No producers thread to close\n");
         }
     } else if (type == -1) {
-        if (consumers_count > 0 && ind < consumers_count) {
-            pthread_mutex_lock(&consumers_working_mutex);
+        pthread_mutex_lock(&consumers_working_mutex);
+        if (consumers_count > 0 && ind >= 0 && ind < MAX_CONSUMER_THREADS && consumers_working[ind] == 1) {
+            if (producers_count == 0 && message_queue->len == 0) {
+                pthread_cancel(consumers[ind]);
+                pthread_mutex_unlock(&queue_mutex);
+            }
+
             consumers_working[ind] = 0;
             pthread_mutex_unlock(&consumers_working_mutex);
 
             pthread_join(consumers[ind], NULL);
     
+            pthread_mutex_lock(&consumers_working_mutex);
             consumers_count--;
+            pthread_mutex_unlock(&consumers_working_mutex);
     
             printf("Parent: closed %dth consumer thread. Remaining: %d\n", ind, consumers_count);
         } else {
+            pthread_mutex_unlock(&consumers_working_mutex);
             printf("Parent: No consumers thread to close\n");
         }
     } else {
@@ -302,6 +318,8 @@ int main() {
         } else if (strcmp(option, "s") == 0) {
             printf("\nParent: Now %d producer threads, %d consumer threads", producers_count, consumers_count);
         } else if (strcmp(option, "r") == 0) {
+            if (consumers_count == 0) continue;
+
             sem_wait(&free_space_sem);
 
             pthread_mutex_lock(&queue_mutex);
