@@ -3,6 +3,7 @@
 #include <unistd.h>
 #include <string.h>
 #include <pthread.h>
+#include <signal.h>
 #include "./headers/queue.h"
 
 #define MAX_CONSUMER_THREADS 10
@@ -54,22 +55,37 @@ void sync_destroy() {
 
 // THREAD PROCESSING
 
+int checkTermProducer(int ind, int is_mutex_should_be_unlocked) {
+    pthread_mutex_lock(&producers_working_mutex);
+
+    if (producers_working[ind] == 0) {
+        pthread_mutex_unlock(&producers_working_mutex);
+        
+        if (is_mutex_should_be_unlocked) pthread_mutex_unlock(&queue_mutex);
+        
+        printf("\nProducer (ind %d): Closing\n", ind);
+        fflush(stdout);
+        return 1;
+    }
+
+    pthread_mutex_unlock(&producers_working_mutex);
+
+    return 0;
+}
+
 void* producer_thread_processing(void* arg) {
     int ind = *(int*)arg;
     free(arg);
 
     while (1) {
-        pthread_mutex_lock(&producers_working_mutex);
-        if (producers_working[ind] == 0) {
-            pthread_mutex_unlock(&producers_working_mutex);
-            break;
-        }
-        pthread_mutex_unlock(&producers_working_mutex);
+        if (checkTermProducer(ind, 1)) return NULL;
 
         sleep(3);
-
+        
         pthread_mutex_lock(&queue_mutex);
         while (queue_is_full(message_queue)) {
+            if (checkTermProducer(ind, 1)) return NULL;
+
             pthread_cond_wait(&free_space_cond, &queue_mutex);
         }
 
@@ -79,9 +95,25 @@ void* producer_thread_processing(void* arg) {
         pthread_cond_signal(&items_cond);
         pthread_mutex_unlock(&queue_mutex);
     }
+}
 
-    printf("\nProducer (ind %d): Closing\n", ind);
-    return NULL;
+
+int checkTermConsumer(int ind, int is_mutex_should_be_unlocked) {
+    pthread_mutex_lock(&consumers_working_mutex);
+
+    if (consumers_working[ind] == 0) {
+        pthread_mutex_unlock(&consumers_working_mutex);
+        
+        if (is_mutex_should_be_unlocked) pthread_mutex_unlock(&queue_mutex);
+        
+        printf("\nConsumer (ind %d): Closing\n", ind);
+        fflush(stdout);
+        return 1;
+    }
+
+    pthread_mutex_unlock(&consumers_working_mutex);
+
+    return 0;
 }
 
 void* consumer_thread_processing(void* arg) {
@@ -89,17 +121,14 @@ void* consumer_thread_processing(void* arg) {
     free(arg);
 
     while (1) {
-        pthread_mutex_lock(&consumers_working_mutex);
-        if (consumers_working[ind] == 0) {
-            pthread_mutex_unlock(&consumers_working_mutex);
-            break;
-        }
-        pthread_mutex_unlock(&consumers_working_mutex);
+        if (checkTermConsumer(ind, 1)) return NULL;
 
         sleep(4);
 
         pthread_mutex_lock(&queue_mutex);
         while (queue_is_empty(message_queue)) {
+            if (checkTermConsumer(ind, 1)) return NULL;
+
             pthread_cond_wait(&items_cond, &queue_mutex);
         }
 
@@ -119,9 +148,6 @@ void* consumer_thread_processing(void* arg) {
         pthread_cond_signal(&free_space_cond);
         pthread_mutex_unlock(&queue_mutex);
     }
-
-    printf("\nConsumer (ind %d): Closing\n", ind);
-    return NULL;
 }
 
 
@@ -185,38 +211,65 @@ void create_thread(int opt) {
 // CLOSING TREADS
 
 void close_thread_by_ind(int ind, int type) {
+    int is_should_wait = 1;
+
     if (type == 1) {
-        if (producers_count > 0 && ind < producers_count) {
-            pthread_mutex_lock(&producers_working_mutex);
+        pthread_mutex_lock(&producers_working_mutex);
+        if (producers_count > 0 && ind >= 0 && ind < MAX_PRODUCER_THREADS && producers_working[ind] == 1) {
+            if (consumers_count == 0 && message_queue->len == message_queue->max_len) {
+                pthread_cancel(producers[ind]);
+                is_should_wait = 0;
+            }
+
             producers_working[ind] = 0;
             pthread_mutex_unlock(&producers_working_mutex);
 
-            pthread_join(producers[ind], NULL);
+            if (is_should_wait) {
+                pthread_cond_broadcast(&free_space_cond);
+                pthread_join(producers[ind], NULL);
+            } else {
+                is_should_wait = 1;
+            }
 
+            pthread_mutex_lock(&producers_working_mutex);
             producers_count--;
+            pthread_mutex_unlock(&producers_working_mutex);
     
             printf("Parent: closed %dth producer thread. Remaining: %d\n", ind, producers_count);
         } else {
+            pthread_mutex_unlock(&producers_working_mutex);
             printf("Parent: No producers thread to close\n");
         }
     } else if (type == -1) {
-        if (consumers_count > 0 && ind < consumers_count) {
-            pthread_mutex_lock(&consumers_working_mutex);
+        pthread_mutex_lock(&consumers_working_mutex);
+        if (consumers_count > 0 && ind >= 0 && ind < MAX_CONSUMER_THREADS && consumers_working[ind] == 1) {
+            if (producers_count == 0 && message_queue->len == 0) {
+                pthread_cancel(consumers[ind]);
+                is_should_wait = 0;
+            }
+
             consumers_working[ind] = 0;
             pthread_mutex_unlock(&consumers_working_mutex);
 
-            pthread_join(consumers[ind], NULL);
+            if (is_should_wait) {
+                pthread_cond_broadcast(&items_cond);
+                pthread_join(consumers[ind], NULL);
+            } else {
+                is_should_wait = 1;
+            }
     
+            pthread_mutex_lock(&consumers_working_mutex);
             consumers_count--;
+            pthread_mutex_unlock(&consumers_working_mutex);
     
             printf("Parent: closed %dth consumer thread. Remaining: %d\n", ind, consumers_count);
         } else {
+            pthread_mutex_unlock(&consumers_working_mutex);
             printf("Parent: No consumers thread to close\n");
         }
     } else {
         printf("Parent: invalid pthread type\n");
     }
-
 }
 
 void close_all_threads(int type) {
@@ -257,6 +310,12 @@ void cleanup_and_exit() {
     printf("\nCleanup complete. Exiting...\n");
 }
 
+void termination_handler(int signum) {
+    (void)signum;
+    cleanup_and_exit();
+    exit(1);
+}
+
 
 // QUEUE
 
@@ -271,6 +330,9 @@ void message_queue_init() {
 
 
 int main() {
+    signal(SIGINT, termination_handler);
+    srand(time(NULL));
+
     message_queue_init();
     sync_init();
 

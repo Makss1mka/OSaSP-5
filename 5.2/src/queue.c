@@ -119,7 +119,7 @@ message_queue_element_t* queue_pop(message_queue_t* queue) {
     queue->messages[queue->head] = NULL;
     queue->head = (queue->head + 1) % queue->max_len;
     queue->len--;
-
+    
     return data;
 }
 
@@ -160,5 +160,5 @@ int queue_is_full(message_queue_t* queue) {
 }
 
 int queue_is_empty(message_queue_t* queue) {
-    return queue->len != queue->max_len;
+    return queue->len == 0;
 }

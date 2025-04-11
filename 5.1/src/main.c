@@ -4,6 +4,8 @@
 #include <string.h>
 #include <pthread.h>
 #include <semaphore.h>
+#include <signal.h>
+#include <sched.h>
 #include "./headers/queue.h"
 
 #define MAX_CONSUMER_THREADS 10
@@ -24,6 +26,7 @@ sem_t items_sem;
 pthread_mutex_t queue_mutex;
 pthread_mutex_t consumers_working_mutex;
 pthread_mutex_t producers_working_mutex;
+pthread_mutex_t reduce_mutex;
 
 message_queue_t* message_queue;
 
@@ -37,6 +40,7 @@ void sync_init() {
         || pthread_mutex_init(&queue_mutex, NULL) != 0
         || pthread_mutex_init(&consumers_working_mutex, NULL) != 0
         || pthread_mutex_init(&producers_working_mutex, NULL) != 0
+        || pthread_mutex_init(&reduce_mutex, NULL) != 0
     ) {
         perror("Semaphores/mutexes creation failed");
         exit(1);
@@ -49,6 +53,7 @@ void sync_destroy() {
     pthread_mutex_destroy(&queue_mutex);
     pthread_mutex_destroy(&consumers_working_mutex);
     pthread_mutex_destroy(&producers_working_mutex);
+    pthread_mutex_destroy(&reduce_mutex);
 }
 
 
@@ -58,6 +63,10 @@ void sync_destroy() {
 void* producer_thread_processing(void* arg) {
     int ind = *(int*)arg;
     free(arg);
+
+    struct sched_param param;
+    param.sched_priority = 1;
+    pthread_setschedparam(pthread_self(), SCHED_OTHER, &param);
 
     while (1) {
         pthread_mutex_lock(&producers_working_mutex);
@@ -86,6 +95,10 @@ void* producer_thread_processing(void* arg) {
 void* consumer_thread_processing(void* arg) {
     int ind = *(int*)arg;
     free(arg);
+
+    struct sched_param param;
+    param.sched_priority = 1;
+    pthread_setschedparam(pthread_self(), SCHED_OTHER, &param);
 
     while (1) {
         pthread_mutex_lock(&consumers_working_mutex);
@@ -187,13 +200,12 @@ void close_thread_by_ind(int ind, int type) {
         if (producers_count > 0 && ind >= 0 && ind < MAX_PRODUCER_THREADS && producers_working[ind] == 1) {
             if (consumers_count == 0 && message_queue->len == message_queue->max_len) {
                 pthread_cancel(producers[ind]);
-                pthread_mutex_unlock(&queue_mutex);
             }
 
             producers_working[ind] = 0;
             pthread_mutex_unlock(&producers_working_mutex);
 
-            pthread_join(producers[ind], NULL);
+            pthread_join(producers[ind], NULL); 
 
             pthread_mutex_lock(&producers_working_mutex);
             producers_count--;
@@ -209,7 +221,6 @@ void close_thread_by_ind(int ind, int type) {
         if (consumers_count > 0 && ind >= 0 && ind < MAX_CONSUMER_THREADS && consumers_working[ind] == 1) {
             if (producers_count == 0 && message_queue->len == 0) {
                 pthread_cancel(consumers[ind]);
-                pthread_mutex_unlock(&queue_mutex);
             }
 
             consumers_working[ind] = 0;
@@ -269,6 +280,13 @@ void cleanup_and_exit() {
     printf("\nCleanup complete. Exiting...\n");
 }
 
+void termination_handler(int signum) {
+    (void)signum;
+    cleanup_and_exit();
+    exit(1);
+}
+
+
 
 // QUEUE
 
@@ -283,6 +301,16 @@ void message_queue_init() {
 
 
 int main() {
+    struct sched_param param;
+    param.sched_priority = 99;
+
+    if (pthread_setschedparam(pthread_self(), SCHED_FIFO, &param) != 0) {
+        perror("Failed to set main thread priority");
+    }
+
+    signal(SIGINT, termination_handler);
+    srand(time(NULL));
+    
     message_queue_init();
     sync_init();
 

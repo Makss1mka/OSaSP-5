@@ -40,7 +40,7 @@ void queue_expand(message_queue_t* queue) {
 
 void queue_reduce(message_queue_t* queue) {
     if (!queue) {
-        printf("Queue: queue is null");
+        printf("\nQueue: queue is null");
         return;
     }
 
@@ -48,8 +48,8 @@ void queue_reduce(message_queue_t* queue) {
         return;
     }
 
-    if (queue->max_len == 0) {
-        printf("Queue: cannot reduce queue, max len is actualy 0");
+    if (queue->max_len == 1) {
+        printf("\nQueue: cannot reduce queue, max len is actualy 1");
         return;
     }
 
@@ -63,6 +63,7 @@ void queue_reduce(message_queue_t* queue) {
 
     queue->messages = realloc(queue->messages, sizeof(message_queue_element_t*) * --(queue->max_len));
 
+    printf("\nQueue: reduced, actual max-len = %d", queue->max_len);
     return;
 }
 
