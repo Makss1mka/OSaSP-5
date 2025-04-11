@@ -26,7 +26,6 @@ sem_t items_sem;
 pthread_mutex_t queue_mutex;
 pthread_mutex_t consumers_working_mutex;
 pthread_mutex_t producers_working_mutex;
-pthread_mutex_t reduce_mutex;
 
 message_queue_t* message_queue;
 
@@ -40,7 +39,6 @@ void sync_init() {
         || pthread_mutex_init(&queue_mutex, NULL) != 0
         || pthread_mutex_init(&consumers_working_mutex, NULL) != 0
         || pthread_mutex_init(&producers_working_mutex, NULL) != 0
-        || pthread_mutex_init(&reduce_mutex, NULL) != 0
     ) {
         perror("Semaphores/mutexes creation failed");
         exit(1);
@@ -53,7 +51,6 @@ void sync_destroy() {
     pthread_mutex_destroy(&queue_mutex);
     pthread_mutex_destroy(&consumers_working_mutex);
     pthread_mutex_destroy(&producers_working_mutex);
-    pthread_mutex_destroy(&reduce_mutex);
 }
 
 
